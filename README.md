@@ -1,1 +1,1 @@
-# hhtwhc-BioSpatial-Intelligence
+# BioSpatial-Intelligence

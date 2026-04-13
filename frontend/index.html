@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BioSpatial-Intelligence 實時監測</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { margin: 0; padding: 0; font-family: sans-serif; }
+        #map { height: 100vh; width: 100%; }
+        .info-panel {
+            position: absolute; top: 10px; right: 10px; z-index: 1000;
+            background: rgba(255, 255, 255, 0.9); padding: 15px;
+            border-radius: 8px; box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            max-width: 200px;
+        }
+        .legend { line-height: 18px; color: #555; }
+        .legend i { width: 18px; height: 18px; float: left; margin-right: 8px; opacity: 0.7; }
+    </style>
+</head>
+<body>
+
+    <div class="info-panel">
+        <h4 style="margin-top:0">棲地監測面板</h4>
+        <div id="status" style="font-size: 0.9em; margin-bottom: 10px;">📡 正在連線後端...</div>
+        <div class="legend">
+            <div><i style="background: #2b8cbe"></i> 水體/河流</div>
+            <div><i style="background: #238b45"></i> 高植生/林地</div>
+            <div><i style="background: #737373"></i> 都市建物</div>
+            <div><i style="background: #8c510a"></i> 裸露地/工地</div>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+        // 1. 初始化地圖
+        const map = L.map('map').setView([24.185, 120.705], 15);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        // 2. 定義顏色映射表 (對應後端 HABITAT_MAP)
+        const habitatColors = {
+            "水體/河流": "#2b8cbe",
+            "高植生/林地": "#238b45",
+            "都市建物/人造設施": "#737373",
+            "裸露地/工地": "#8c510a"
+        };
+
+        // 3. 設定 GeoJSON 樣式函數
+        function habitatStyle(feature) {
+            return {
+                fillColor: habitatColors[feature.properties.habitat_type] || "#bdc3c7",
+                weight: 1,
+                opacity: 1,
+                color: 'white',
+                fillOpacity: 0.6
+            };
+        }
+
+        // 4. 設定交互行為：點擊彈出資訊
+        function onEachHabitat(feature, layer) {
+            if (feature.properties) {
+                const popupContent = `
+                    <strong>棲地類型：</strong>${feature.properties.habitat_type}<br>
+                    <strong>估算面積：</strong>${feature.properties.area_sqm.toLocaleString()} m²
+                `;
+                layer.bindPopup(popupContent);
+            }
+        }
+
+        // 5. 非同步抓取資料
+        async function fetchHabitats() {
+            const statusEl = document.getElementById('status');
+            try {
+                const response = await fetch('http://127.0.0.1:8000/habitats');
+                if (!response.ok) throw new Error('連線失敗');
+                
+                const data = await response.json();
+                
+                // 將 GeoJSON 加入地圖
+                L.geoJSON(data, {
+                    style: habitatStyle,
+                    onEachFeature: onEachHabitat
+                }).addTo(map);
+
+                statusEl.innerText = `✅ 成功載入 ${data.features.length} 筆資料`;
+                statusEl.style.color = "green";
+            } catch (error) {
+                console.error('Error:', error);
+                statusEl.innerText = "❌ 無法從後端獲取資料";
+                statusEl.style.color = "red";
+            }
+        }
+
+        // 執行抓取
+        fetchHabitats();
+    </script>
+</body>
+</html>

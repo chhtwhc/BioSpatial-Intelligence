@@ -1,7 +1,7 @@
 import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Polygon, MultiPolygon
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
 # --- 1. 全域常數 ---
@@ -16,23 +16,26 @@ def save_gdf_to_postgis(gdf: gpd.GeoDataFrame, table_name: str, db_url: str = DE
     engine = get_engine(db_url)
     try:
         print(f"[*] 正在連線至資料庫並寫入 {len(gdf)} 筆資料至 '{table_name}'...")
-        # if_exists='append' 表示追加資料
+        
+        # ⚠️ 修改點 1：將 if_exists 改為 'replace'，覆蓋掉之前錯誤的資料表
         gdf.to_postgis(
             name=table_name, 
             con=engine, 
-            if_exists='append', 
+            if_exists='replace', 
             index=False
         )
-        print(f"[+] 成功！資料已正式存入 PostGIS ({table_name})。")
+        
+        # ⚠️ 額外動作：因為 to_postgis(replace) 預設不會把 id 設為 Primary Key，
+        # 我們需要補上一句 SQL 告訴資料庫 id 是主鍵，這樣 SQLAlchemy 才不會報錯。
+        with engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN id SERIAL PRIMARY KEY;"))
+            
+        print(f"[+] 成功！資料已正式存入 PostGIS ({table_name})，並已設定主鍵。")
     except Exception as e:
         print(f"[-] 寫入過程發生錯誤: {e}")
-        print("💡 請確認：1. Docker 是否啟動 2. 密碼是否正確 3. 是否已安裝 psycopg2-binary")
 
 def seed_test_data() -> gpd.GeoDataFrame:
-    """
-    產生模擬棲地圖資 (僅供測試使用)。
-    此函式已與主邏輯分離，需手動呼叫才會執行。
-    """
+    """產生模擬棲地圖資"""
     print("[*] 正在產生模擬棲地測試資料...")
     
     p1 = Polygon([(120.66, 24.15), (120.67, 24.15), (120.67, 24.16), (120.66, 24.16), (120.66, 24.15)])
@@ -40,6 +43,8 @@ def seed_test_data() -> gpd.GeoDataFrame:
     p3 = Polygon([(120.65, 24.13), (120.66, 24.13), (120.66, 24.14), (120.65, 24.14), (120.65, 24.13)])
 
     data = {
+        # ⚠️ 修改點 2：明確加入 id 欄位
+        'id': [1, 2, 3],
         'habitat_type': ['次生林', '草生地', '水體'],
         'geom': [MultiPolygon([p1]), MultiPolygon([p2]), MultiPolygon([p3])]
     }
@@ -49,7 +54,6 @@ def seed_test_data() -> gpd.GeoDataFrame:
     return gdf
 
 if __name__ == "__main__":
-    # 測試模式：直接執行此檔案時，才會注入假資料
     print("[!] 進入測試模式：即將寫入假資料...")
     mock_gdf = seed_test_data()
     save_gdf_to_postgis(mock_gdf, table_name='habitats')

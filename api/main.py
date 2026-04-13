@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, Query, HTTPException, Body
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from pydantic import BaseModel, field_validator
@@ -8,6 +9,22 @@ import json
 from . import models, database
 
 app = FastAPI(title="BioSpatial Intelligence API")
+
+# --- CORS 配置：必須在端點定義之前加入 ---
+# 在開發階段，我們可以先允許所有來源 (*)，或指定你的前端埠號
+origins = [
+    "http://localhost",
+    "http://localhost:5500", # 常見的 Live Server 埠號
+    "http://127.0.0.1:5500",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # MVP 階段建議先設為 "*" 確保通暢，部署時再縮小範圍
+    allow_credentials=True,
+    allow_methods=["*"], # 允許所有方法 (GET, POST, OPTIONS 等)
+    allow_headers=["*"], # 允許所有 Header
+)
 
 # --- 1. 定義資料交換格式 (Data Contract) ---
 

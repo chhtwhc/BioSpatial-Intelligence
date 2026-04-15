@@ -1,7 +1,10 @@
 import sys
+import argparse
+
+# ⚠️ 修改點 1：因為這個腳本已經在 data/ 裡面，改用相對路徑匯入 (或同層直接匯入)
 from sentinel_api_client import fetch_satellite_image
 from image_processor import process_image_to_polygons
-from database_manager import save_gdf_to_postgis, DEFAULT_DB_URL
+from database_manager import save_gdf_to_postgis
 
 # --- 配置區 ---
 BBOX_TARGET = [120.701, 24.180, 120.711, 24.190]
@@ -14,7 +17,7 @@ HABITAT_MAP = {
     3: "裸露地/工地"
 }
 
-def run_integration_pipeline():
+def run_integration_pipeline(clear_old_data: bool = False):
     try:
         print("====== 🚀 啟動 Sentinel 棲地分析自動化管線 ======")
         
@@ -37,7 +40,8 @@ def run_integration_pipeline():
 
         # 步驟 4: 寫入資料庫
         print("\n>>> 步驟 4: 資料入庫")
-        save_gdf_to_postgis(gdf=output_gdf, table_name=TARGET_TABLE, db_url=DEFAULT_DB_URL)
+        # ⚠️ 修改點 2：直接呼叫 save_gdf_to_postgis，讓它自己去抓預設的連線設定，並傳入清空參數
+        save_gdf_to_postgis(gdf=output_gdf, table_name=TARGET_TABLE, clear_old_data=clear_old_data)
         
         print("\n🎉 整合管線全部執行成功！")
 
@@ -45,4 +49,9 @@ def run_integration_pipeline():
         print(f"\n❌ 管線執行發生未預期錯誤: {e}")
 
 if __name__ == "__main__":
-    run_integration_pipeline()
+    # ⚠️ 修改點 3：加入指令列參數，讓 PM 或開發者決定是否要清空舊資料
+    parser = argparse.ArgumentParser(description="執行 Sentinel 影像處理至 PostGIS 的自動化管線")
+    parser.add_argument("--reset", action="store_true", help="執行前清空資料庫中的舊資料表")
+    args = parser.parse_args()
+    
+    run_integration_pipeline(clear_old_data=args.reset)

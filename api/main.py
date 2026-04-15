@@ -2,85 +2,36 @@ from fastapi import FastAPI, Depends, Query, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from pydantic import BaseModel, field_validator
 from geoalchemy2.shape import to_shape
 import json
 
-from . import models, database
+# 導入內部模組
+from . import models, database, schemas
+from .config import ALLOWED_ORIGINS
 
 app = FastAPI(title="BioSpatial Intelligence API")
 
-# --- CORS 配置：必須在端點定義之前加入 ---
-# 在開發階段，我們可以先允許所有來源 (*)，或指定你的前端埠號
-origins = [
-    "http://localhost",
-    "http://localhost:5500", # 常見的 Live Server 埠號
-    "http://127.0.0.1:5500",
-]
-
+# --- CORS 配置 ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # MVP 階段建議先設為 "*" 確保通暢，部署時再縮小範圍
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"], # 允許所有方法 (GET, POST, OPTIONS 等)
-    allow_headers=["*"], # 允許所有 Header
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# --- 1. 定義資料交換格式 (Data Contract) ---
-
-# 輸出 Schema
-class Feature(BaseModel):
-    type: str = "Feature"
-    properties: dict
-    geometry: dict
-
-class FeatureCollection(BaseModel):
-    type: str = "FeatureCollection"
-    features: list[Feature]
-
-# 輸入 Schema：強制檢驗傳入的空間資料格式
-class RegionQuery(BaseModel):
-    type: str = "Feature"
-    geometry: dict
-
-    @field_validator('geometry')
-    @classmethod
-    def validate_epsg4326(cls, v):
-        """強制檢查：確保傳入的座標系統符合 EPSG:4326 的經緯度合理範圍"""
-        geom_type = v.get("type")
-        if geom_type not in ["Polygon", "MultiPolygon"]:
-            raise ValueError("幾何類型必須為 Polygon 或 MultiPolygon")
-        
-        # 簡易防呆：檢查第一組座標的經度是否落在合理範圍 (-180 到 180)
-        # 若傳入 EPSG:3826 (如 X: 215000, Y: 2670000)，此處將直接阻擋
-        try:
-            if geom_type == "Polygon":
-                first_coord = v["coordinates"][0][0]
-            else:
-                first_coord = v["coordinates"][0][0][0]
-                
-            lon, lat = first_coord[0], first_coord[1]
-            if not (-180 <= lon <= 180) or not (-90 <= lat <= 90):
-                raise ValueError(f"座標數值異常 (經度: {lon}, 緯度: {lat})，請確認是否為 EPSG:4326 投影")
-        except (KeyError, IndexError, TypeError):
-            raise ValueError("GeoJSON 座標結構解析失敗")
-            
-        return v
-
 # --- 快取機制配置 ---
-# 針對無參數的靜態查詢建立記憶體快取
 STATIC_HABITAT_CACHE = None
 
-# --- 2. API 端點 ---
+# --- API 端點 ---
 
-@app.get("/habitats", response_model=FeatureCollection)
+@app.get("/habitats", response_model=schemas.FeatureCollection)
 def get_habitats(
     bbox: str = Query(None, description="範圍查詢框限制 (格式: min_lon,min_lat,max_lon,max_lat)"),
     db: Session = Depends(database.get_db)
 ):
     global STATIC_HABITAT_CACHE
     
-    # 若為全域查詢且快取已存在，直接命中快取回傳
     if not bbox and STATIC_HABITAT_CACHE is not None:
         return STATIC_HABITAT_CACHE
 
@@ -116,24 +67,19 @@ def get_habitats(
         
     response_data = {"type": "FeatureCollection", "features": features}
     
-    # 寫入快取
     if not bbox:
         STATIC_HABITAT_CACHE = response_data
         
     return response_data
 
-@app.post("/habitats/intersect", response_model=FeatureCollection)
+@app.post("/habitats/intersect", response_model=schemas.FeatureCollection)
 def post_habitats_intersect(
-    query_data: RegionQuery = Body(...),
+    query_data: schemas.RegionQuery = Body(...),
     db: Session = Depends(database.get_db)
 ):
-    """
-    接收前端傳送的 EPSG:4326 GeoJSON 多邊形，回傳交集的棲地資料。
-    """
-    # 將 dict 轉為 JSON 字串，交由 PostGIS ST_GeomFromGeoJSON 處理
+    """接收前端傳送的 EPSG:4326 GeoJSON 多邊形，回傳交集的棲地資料。"""
     geojson_str = json.dumps(query_data.geometry)
     
-    # 建立交集查詢
     query = db.query(
         models.Habitat,
         func.ST_Area(func.ST_Transform(models.Habitat.geom, 3826)).label('area_sqm')

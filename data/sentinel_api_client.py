@@ -13,11 +13,10 @@ from rasterio.plot import show
 def fetch_satellite_image(
     bbox: List[float], 
     date_range: str = "2026-01-01/2026-04-12",
-    output_filename: str = "habitat_sample_100ha.tif"
+    output_filename: str = "data/habitat_sample_100ha.tif" # 強制存入 data/ 內
 ) -> Optional[str]:
     """
     從 Planetary Computer 抓取 Sentinel-2 影像並裁切儲存。
-    回傳儲存的檔案路徑，若失敗則回傳 None。
     """
     print("[*] 正在連線至 Microsoft Planetary Computer...")
     catalog = pystac_client.Client.open(

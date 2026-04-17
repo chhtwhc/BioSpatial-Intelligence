@@ -37,8 +37,22 @@ def process_image_to_polygons(
         gdf = gpd.GeoDataFrame.from_features(list(results), crs=crs)
         
         # 移除極小碎屑
-        gdf['area'] = gdf.geometry.area
-        gdf = gdf[gdf['area'] > min_area_sqm].drop(columns=['area'])
+        # 若影像本身還沒設定 CRS，先賦予它
+        if gdf.crs is None:
+            gdf.set_crs(crs, inplace=True)
+
+        # 暫時轉換至投影座標系 (EPSG:3826 TWD97) 以計算真實平方公尺
+        gdf_projected = gdf.to_crs("EPSG:3826")
+        
+        # 計算精確面積並存回原本的 GDF
+        gdf['area_sqm'] = gdf_projected.geometry.area
+        
+        # 過濾掉小於 min_area_sqm 的碎屑多邊形
+        gdf = gdf[gdf['area_sqm'] > min_area_sqm].drop(columns=['area_sqm'])
+
+        # 座標標準化：確保最終輸出格式為系統規範的 EPSG:4326
+        if gdf.crs != "EPSG:4326":
+            gdf = gdf.to_crs("EPSG:4326")
 
         # 座標標準化
         if gdf.crs != "EPSG:4326":

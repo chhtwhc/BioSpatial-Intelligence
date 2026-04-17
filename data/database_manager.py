@@ -29,7 +29,7 @@ def save_gdf_to_postgis(gdf: gpd.GeoDataFrame, table_name: str, db_url: str = DB
     try:
         print(f"[*] 正在連線至資料庫並準備寫入 {len(gdf)} 筆資料至 '{table_name}'...")
         
-        columns_to_keep = ['habitat_type', 'geom']
+        columns_to_keep = ['habitat_type', 'source', 'geom']
         gdf_clean = gdf[[col for col in columns_to_keep if col in gdf.columns]]
         
         # 若有明確下達指令，才清空資料表

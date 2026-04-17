@@ -3,42 +3,53 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BioSpatial-Intelligence 實時監測</title>
+    <title>BioSpatial-Intelligence Ver2.0</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
         #map { height: 100vh; width: 100%; }
         
-        /* 資訊儀表板 */
         .info-panel {
             position: absolute; top: 10px; right: 10px; z-index: 1000;
             background: rgba(255, 255, 255, 0.95); padding: 15px 20px;
-            border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-            min-width: 220px;
+            border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            min-width: 260px; max-width: 320px;
         }
-        .info-panel h4 { margin: 0 0 10px 0; border-bottom: 2px solid #333; padding-bottom: 5px; }
-        #status { font-size: 0.85em; margin-bottom: 15px; font-weight: bold; }
+        .info-panel h4 { margin: 0 0 10px 0; border-bottom: 2px solid #eee; padding-bottom: 8px; color: #2c3e50; }
         
-        /* 透明度控制項樣式 */
-        .opacity-control { margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px dashed #ccc; }
-        .opacity-control label { font-size: 0.85em; font-weight: bold; display: block; margin-bottom: 5px; color: #444; }
-        #opacity-slider { width: 100%; cursor: pointer; }
+        /* 來源切換器樣式 */
+        .source-control { margin-bottom: 15px; padding: 10px; background: #f8f9fa; border-radius: 8px; border: 1px solid #e9ecef; }
+        .source-control label { display: block; font-size: 0.85em; font-weight: bold; margin-bottom: 5px; color: #666; }
+        #source-selector { width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ddd; cursor: pointer; font-size: 0.9em; }
 
-        /* 統計列表樣式 */
-        .stat-item { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.9em; }
-        .stat-color-box { width: 15px; height: 15px; display: inline-block; margin-right: 8px; vertical-align: middle; border: 1px solid #999; }
-        .stat-value { font-family: monospace; font-weight: bold; }
-        .total-area { margin-top: 10px; padding-top: 10px; border-top: 1px solid #ccc; text-align: right; font-weight: bold; }
+        #status { font-size: 0.85em; margin-bottom: 12px; font-weight: bold; }
+        .opacity-control { margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px dashed #ccc; }
+        .opacity-control label { font-size: 0.85em; font-weight: bold; display: block; margin-bottom: 5px; }
+        #opacity-slider { width: 100%; }
+
+        .stat-item { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.9em; align-items: center; }
+        .stat-color-box { width: 14px; height: 14px; border-radius: 3px; margin-right: 8px; border: 1px solid rgba(0,0,0,0.1); }
+        .stat-value { font-family: 'Consolas', monospace; font-weight: 600; color: #2c3e50; }
+        .total-area { margin-top: 10px; padding-top: 10px; border-top: 2px solid #eee; text-align: right; font-weight: bold; color: #2c3e50; }
     </style>
 </head>
 <body>
 
     <div class="info-panel">
-        <h4>棲地空間統計面板</h4>
-        <div id="status">📡 正在初始化...</div>
+        <h4>棲地空間監測 Ver2.0</h4>
+        
+        <div class="source-control">
+            <label for="source-selector">🛰️ 選擇 AI 分析來源</label>
+            <select id="source-selector">
+                <option value="sentinel">Sentinel-2 (10m 衛星)</option>
+                <option value="nlsc">NLSC 航照 (高解析正射影像)</option>
+            </select>
+        </div>
+
+        <div id="status">📡 正在初始化系統...</div>
         
         <div class="opacity-control">
-            <label for="opacity-slider">圖層透明度: <span id="opacity-val">50%</span></label>
+            <label for="opacity-slider">透明度: <span id="opacity-val">50%</span></label>
             <input type="range" id="opacity-slider" min="0" max="1" step="0.1" value="0.5">
         </div>
 
@@ -50,14 +61,9 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
     <script>
-        // --- 1. 初始化地圖與多底圖配置 ---
-        const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '© OpenStreetMap'
-        });
-        
-        const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-            attribution: 'Tiles &copy; Esri &mdash; Source: Esri'
-        });
+        // --- 1. 初始化底圖 ---
+        const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' });
+        const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { attribution: 'Esri' });
 
         const map = L.map('map', {
             center: [24.185, 120.705],
@@ -65,12 +71,9 @@
             layers: [satelliteLayer] 
         });
 
-        L.control.layers({
-            "衛星影像 (Esri)": satelliteLayer,
-            "標準地圖 (OSM)": osmLayer
-        }).addTo(map);
+        L.control.layers({ "衛星影像 (Esri)": satelliteLayer, "標準地圖 (OSM)": osmLayer }).addTo(map);
 
-        // --- 2. 核心參數與樣式 ---
+        // --- 2. 核心狀態與配色 ---
         const habitatColors = {
             "水體/河流": "#2b8cbe",
             "高植生/林地": "#238b45",
@@ -78,52 +81,54 @@
             "裸露地/工地": "#8c510a"
         };
 
-        // 全域變數：追蹤當前的透明度，預設為 0.5 (50%)
         let currentOpacity = 0.5;
+        let currentSource = "sentinel"; // 預設來源
 
-        // 建立 GeoJSON 圖層容器
         let geojsonLayer = L.geoJSON(null, {
             style: (feature) => ({
                 fillColor: habitatColors[feature.properties.habitat_type] || "#bdc3c7",
-                weight: 1.5,
-                opacity: 1, // 這是邊框的透明度，保持不透明以便辨識邊界
+                weight: 1,
                 color: '#ffffff',
-                fillOpacity: currentOpacity // 這是多邊形內部的透明度，綁定變數
+                fillOpacity: currentOpacity
             }),
             onEachFeature: (feature, layer) => {
                 const props = feature.properties;
                 layer.bindPopup(`
-                    <div style="font-size: 1.1em; margin-bottom: 5px;"><b>${props.habitat_type}</b></div>
-                    <div>精確面積：<b>${props.area_sqm.toLocaleString()}</b> m²</div>
-                    <div style="color: #666; font-size: 0.8em; margin-top: 5px;">ID: ${props.id}</div>
+                    <div style="min-width: 150px;">
+                        <b style="font-size: 1.1em; color:#2c3e50;">${props.habitat_type}</b><br/>
+                        <hr style="margin: 5px 0; border: 0; border-top: 1px solid #eee;">
+                        面積：<b>${props.area_sqm.toLocaleString()}</b> m²<br/>
+                        來源：<span style="color:#e67e22; font-weight:bold;">${props.source.toUpperCase()}</span>
+                    </div>
                 `);
             }
         }).addTo(map);
 
-        // --- 3. 透明度拉桿互動邏輯 (新增) ---
-        document.getElementById('opacity-slider').addEventListener('input', function(e) {
-            // 取得拉桿數值
+        // --- 3. 互動邏輯 ---
+        
+        // 透明度拉桿
+        document.getElementById('opacity-slider').addEventListener('input', (e) => {
             currentOpacity = parseFloat(e.target.value);
-            // 更新 UI 文字標籤 (將 0.5 轉為 50%)
             document.getElementById('opacity-val').innerText = Math.round(currentOpacity * 100) + '%';
-            
-            // 呼叫 Leaflet 的 setStyle 即時更新畫面上所有多邊形的透明度
-            if (geojsonLayer) {
-                geojsonLayer.setStyle({ fillOpacity: currentOpacity });
-            }
+            geojsonLayer.setStyle({ fillOpacity: currentOpacity });
         });
 
-        // --- 4. 動態儀表板更新邏輯 ---
+        // [新增] 來源切換連動
+        document.getElementById('source-selector').addEventListener('change', (e) => {
+            currentSource = e.target.value;
+            fetchHabitatsInView(); // 立即重新抓取
+        });
+
+        // 儀表板更新
         function updateDashboard(features) {
             const dashboardEl = document.getElementById('dashboard');
             if (features.length === 0) {
-                dashboardEl.innerHTML = "<div style='color:#666;'>當前範圍內無資料</div>";
+                dashboardEl.innerHTML = "<div style='color:#666; text-align:center;'>此區域無資料</div>";
                 return;
             }
 
             let stats = {};
             let totalArea = 0;
-            
             features.forEach(f => {
                 const type = f.properties.habitat_type;
                 const area = f.properties.area_sqm;
@@ -142,22 +147,22 @@
                     </div>
                 `;
             }
-            
-            html += `<div class="total-area">總計: ${(totalArea / 10000).toFixed(2)} ha</div>`;
+            html += `<div class="total-area">總計面積: ${(totalArea / 10000).toFixed(2)} ha</div>`;
             dashboardEl.innerHTML = html;
         }
 
-        // --- 5. 非同步框選抓取 (BBOX) 邏輯 ---
+        // 非同步資料抓取 (帶有 Source 參數)
         async function fetchHabitatsInView() {
             const statusEl = document.getElementById('status');
-            statusEl.innerText = "⏳ 更新資料中...";
+            statusEl.innerText = `⏳ 讀取 ${currentSource.toUpperCase()} 資料...`;
             statusEl.style.color = "#d35400";
 
             try {
                 const bounds = map.getBounds();
                 const bboxString = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
                 
-                const response = await fetch(`http://127.0.0.1:8000/habitats?bbox=${bboxString}`);
+                // [修改點]：API 請求現在帶上 source 參數
+                const response = await fetch(`http://127.0.0.1:8000/habitats?bbox=${bboxString}&source=${currentSource}`);
                 if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 
                 const data = await response.json();
@@ -166,20 +171,20 @@
                 geojsonLayer.addData(data);
                 updateDashboard(data.features);
 
-                statusEl.innerText = `✅ 當前視野: ${data.features.length} 個區塊`;
-                statusEl.style.color = "green";
+                statusEl.innerText = `✅ ${currentSource.toUpperCase()}: ${data.features.length} 個圖元`;
+                statusEl.style.color = "#27ae60";
             } catch (error) {
                 console.error('Fetch Error:', error);
                 statusEl.innerText = "❌ 伺服器連線異常";
-                statusEl.style.color = "red";
+                statusEl.style.color = "#c0392b";
                 geojsonLayer.clearLayers();
                 document.getElementById('dashboard').innerHTML = "";
             }
         }
 
-        // --- 6. 綁定事件監聽器 ---
+        // 監聽地圖事件
         map.on('moveend', fetchHabitatsInView);
-        fetchHabitatsInView(); // 首次載入
+        fetchHabitatsInView();
     </script>
 </body>
 </html>

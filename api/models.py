@@ -13,8 +13,8 @@ class Habitat(Base):
     # 對應棲地類型 (如: '次生林', '草生地')
     habitat_type = Column(String(50), nullable=False)
     
-    # 對應 database_manager 中的 area_ha
-    # area_ha = Column(Float)
+    # 紀錄資料來源，例如 "sentinel" 或 "nlsc"
+    source = Column(String(50), nullable=False, default="sentinel")
     
     # 核心空間欄位：對應 PostGIS 的 MultiPolygon，且 SRID 設為 4326
     geom = Column(Geometry(geometry_type='MULTIPOLYGON', srid=4326))

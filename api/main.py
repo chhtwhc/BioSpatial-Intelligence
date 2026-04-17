@@ -1,13 +1,15 @@
 from fastapi import FastAPI, Depends, Query, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, text # 確保匯入了 text
 from geoalchemy2.shape import to_shape
 import json
 
 # 導入內部模組
 from . import models, database, schemas
 from .config import ALLOWED_ORIGINS
+# 匯入管線函式用於分析
+from data.main_pipeline import run_integration_pipeline
 
 app = FastAPI(title="BioSpatial Intelligence API")
 
@@ -27,19 +29,14 @@ STATIC_HABITAT_CACHE = {}
 
 @app.get("/habitats", response_model=schemas.FeatureCollection)
 def get_habitats(
-    bbox: str = Query(None, description="範圍查詢框限制 (格式: min_lon,min_lat,max_lon,max_lat)"),
-    source: str = Query("sentinel", description="影像來源篩選 (例如: sentinel 或 nlsc)"),
+    bbox: str = Query(None, description="範圍查詢框限制"),
+    source: str = Query("sentinel", description="影像來源"),
     db: Session = Depends(database.get_db)
 ):
     global STATIC_HABITAT_CACHE
-    
     if not bbox and source in STATIC_HABITAT_CACHE:
         return STATIC_HABITAT_CACHE[source]
 
-    # 🚀 效能優化核心：
-    # 1. 避免 Select 整個 ORM 物件，只撈取需要的欄位
-    # 2. ST_Simplify(geom, 0.00001): 將多邊形頂點精簡 (0.00001度大約1公尺誤差，能大幅減少傳輸量)
-    # 3. ST_AsGeoJSON: 讓底層資料庫直接幫我們轉好 JSON 字串，省去 Python Shapely 轉換的時間
     query = db.query(
         models.Habitat.id,
         models.Habitat.habitat_type,
@@ -57,54 +54,6 @@ def get_habitats(
             raise HTTPException(status_code=400, detail="bbox 格式錯誤")
 
     results = query.all()
-    
-    features = []
-    # 現在迴圈內不需要跑沈重的 Shapely 轉換了
-    for row in results:
-        features.append({
-            "type": "Feature",
-            "properties": {
-                "id": row.id,
-                "habitat_type": row.habitat_type,
-                "area_sqm": round(row.area_sqm, 2),
-                "source": row.source
-            },
-            "geometry": json.loads(row.geojson_str) # 直接將字串載入為 JSON
-        })
-        
-    response_data = {"type": "FeatureCollection", "features": features}
-    
-    if not bbox:
-        STATIC_HABITAT_CACHE[source] = response_data
-        
-    return response_data
-
-@app.post("/habitats/intersect", response_model=schemas.FeatureCollection)
-def post_habitats_intersect(
-    query_data: schemas.RegionQuery = Body(...),
-    db: Session = Depends(database.get_db)
-):
-    """接收前端傳送的 EPSG:4326 GeoJSON 多邊形，回傳交集的棲地資料。"""
-    geojson_str = json.dumps(query_data.geometry)
-    
-    # 🚀 同步實作效能優化：
-    # 1. 使用 ST_AsGeoJSON 直接在資料庫端轉換，避開 Python 的 Shapely 轉換開銷。
-    # 2. 使用 ST_Simplify 減少頂點數量，大幅降低傳輸量。
-    query = db.query(
-        models.Habitat.id,
-        models.Habitat.habitat_type,
-        models.Habitat.source,
-        func.ST_Area(func.ST_Transform(models.Habitat.geom, 3826)).label('area_sqm'),
-        func.ST_AsGeoJSON(func.ST_Simplify(models.Habitat.geom, 0.00001)).label('geojson_str')
-    ).filter(
-        func.ST_Intersects(
-            models.Habitat.geom, 
-            func.ST_SetSRID(func.ST_GeomFromGeoJSON(geojson_str), 4326)
-        )
-    )
-
-    results = query.all()
-    
     features = []
     for row in results:
         features.append({
@@ -118,7 +67,57 @@ def post_habitats_intersect(
             "geometry": json.loads(row.geojson_str)
         })
         
-    return {"type": "FeatureCollection", "features": features}
+    response_data = {"type": "FeatureCollection", "features": features}
+    if not bbox:
+        STATIC_HABITAT_CACHE[source] = response_data
+    return response_data
+
+@app.post("/analyze")
+def start_analysis(
+    source: str = Query("sentinel"),
+    roi: schemas.RegionQuery = Body(...),
+    db: Session = Depends(database.get_db)
+):
+    roi_geojson = json.dumps(roi.geometry)
+    try:
+        # 空間精確清理
+        sql_delete = text("""
+            DELETE FROM habitats 
+            WHERE ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON(:roi_json), 4326))
+        """)
+        db.execute(sql_delete, {"roi_json": roi_geojson})
+        db.commit()
+    except Exception as e:
+        db.rollback()
+
+    coords = roi.geometry['coordinates'][0]
+    lons = [c[0] for c in coords]
+    lats = [c[1] for c in coords]
+    dynamic_bbox = [min(lons), min(lats), max(lons), max(lats)]
+    
+    success, message = run_integration_pipeline(bbox=dynamic_bbox, source=source)
+    if not success:
+        raise HTTPException(status_code=500, detail=message)
+    
+    return {"status": "success", "message": message, "bbox": dynamic_bbox}
+
+# --- [新增] 全域清空接口 ---
+@app.delete("/habitats/all")
+def clear_all_habitats(db: Session = Depends(database.get_db)):
+    """清空資料庫中所有的棲地紀錄並重設畫布。"""
+    try:
+        # 使用 TRUNCATE 強制重設表格並重新計算 ID 序列
+        db.execute(text("TRUNCATE TABLE habitats RESTART IDENTITY CASCADE;"))
+        db.commit()
+        
+        # 同步清空後端記憶體快取
+        global STATIC_HABITAT_CACHE
+        STATIC_HABITAT_CACHE = {}
+        
+        return {"status": "success", "message": "資料庫已清空，畫布重置成功"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"清空失敗: {str(e)}")
 
 @app.get("/")
 def read_root():

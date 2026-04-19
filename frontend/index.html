@@ -71,7 +71,7 @@
         L.control.layers({ "衛星影像": satelliteLayer, "標準地圖": osmLayer }).addTo(map);
 
         // --- 2. 圖層與狀態 ---
-        const habitatColors = { "水體/河流": "#2b8cbe", "高植生/林地": "#238b45", "都市建物/人造設施": "#737373", "裸露地/工地": "#8c510a" };
+        const habitatColors = { "水體/河流": "#2b8cbe", "高植生/林地": "#238b45", "都市建物/人造設施": "#737373", "裸露地/農田": "#8c510a", "草生地": "#a6d96a" };
         let currentOpacity = 0.5, currentSource = "sentinel";
 
         let geojsonLayer = L.geoJSON(null, {

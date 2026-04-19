@@ -18,18 +18,20 @@ class SAMHabitatSegmenter:
         self.sam = sam_model_registry[model_type](checkpoint=checkpoint_path)
         self.sam.to(device=self.device)
         
-        # 使用自動遮罩生成器 (可根據航照圖複雜度調整參數)
+        # 🌟 亮點 1：全域測繪強化版參數 (解決大面積空白問題)
         self.mask_generator = SamAutomaticMaskGenerator(
             model=self.sam,
-            points_per_side=32, # 掃描點的密度，越高切得越細
-            pred_iou_thresh=0.86,
-            stability_score_thresh=0.92,
-            min_mask_region_area=100 # 過濾掉極小的雜訊遮罩
+            points_per_side=64,           # 掃描網格變密 4 倍
+            pred_iou_thresh=0.6,         # 容忍更多邊界稍模糊的地貌
+            stability_score_thresh=0.70,  # 讓模型不用那麼有把握也敢輸出遮罩
+            min_mask_region_area=10,      # 保留較小的斑塊
+            crop_n_layers=1,              # 啟動影像分塊掃描，強迫放大檢視細節
+            crop_n_points_downscale_factor=2
         )
         print("[+] SAM 模型載入完成！")
 
     def process_image_to_polygons(self, input_file: str) -> gpd.GeoDataFrame:
-        """讀取 GeoTIFF，使用 SAM 進行實體分割，並回傳 GeoDataFrame"""
+        """讀取 GeoTIFF，使用 SAM 進行實體分割，並回傳無重疊的 GeoDataFrame"""
         print(f"[*] 讀取影像進行智能分割: {input_file}")
         
         with rasterio.open(input_file) as src:
@@ -38,45 +40,54 @@ class SAMHabitatSegmenter:
             affine = src.transform
             crs = src.crs
 
-        # SAM 模型預期輸入為 8-bit RGB 影像 (0-255)
-        # 若是衛星圖 (如 Sentinel L2A) 數值範圍可能很大，需先做常規化
-        # 確保影像矩陣在記憶體中是連續的 (解決 OpenCV 底層相容性問題)
+        # 🌟 亮點 2：底層記憶體管理 (解決 OpenCV Layout incompatible 報錯)
         img_contiguous = np.ascontiguousarray(img)
-        
-        # 讓 OpenCV 自動分配記憶體，並加上 type: ignore 讓 Pylance 取消紅線警告
         img_8bit = cv2.normalize(img_contiguous, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8) # type: ignore
 
         print("[*] 正在執行 GPU 智能推論切割 (這將比 CPU 快上數十倍)...")
         start_time = time.time()
         
-        # 核心 AI 推論：產出所有物件的遮罩
         masks = self.mask_generator.generate(img_8bit)
         
-        print(f"[+] 推論完成！耗時: {time.time() - start_time:.2f} 秒。共找到 {len(masks)} 個獨立區域。")
-        print("[*] 正在將 AI 遮罩轉換為具備座標系統的多邊形 (Raster to Vector)...")
+        print(f"[+] 推論完成！耗時: {time.time() - start_time:.2f} 秒。共找到 {len(masks)} 個原始遮罩。")
+        print("[*] 正在執行「空間拓樸平整化 (Flattening)」消除重疊區域...")
 
-        features = []
-        for i, mask_data in enumerate(masks):
-            # 提取二元遮罩矩陣
-            segmentation_mask = mask_data["segmentation"].astype(np.uint8)
+        # 🌟 亮點 3：畫家演算法 (消除俄羅斯娃娃重疊現象)
+        # 依照面積由大到小排序 (大背景在底層，小細節在上層覆蓋)
+        masks_sorted = sorted(masks, key=lambda x: x['area'], reverse=True)
+        
+        # 建立一張與原圖相同的空白畫布
+        height, width = img_8bit.shape[:2]
+        master_mask = np.zeros((height, width), dtype=np.int32)
+        
+        # 將遮罩依序疊加覆蓋
+        for i, mask_data in enumerate(masks_sorted, start=1):
+            bool_mask = mask_data["segmentation"]
+            master_mask[bool_mask] = i  # 小物件會直接蓋掉大物件的衝突像素
             
-            # 利用 rasterio 將二元矩陣轉為地理幾何輪廓
-            for geom, val in shapes(segmentation_mask, mask=segmentation_mask, transform=affine):
-                if val == 1.0: # 確保只處理遮罩內部
-                    features.append({
-                        'geometry': shape(geom),
-                        'properties': {
-                            'sam_id': i,
-                            'area_pixels': mask_data['area'],
-                            # 預留給輕量分類器的欄位，目前先標為未分類
-                            'habitat_type': '待分類 (SAM)', 
-                        }
-                    })
+        print("[*] 正在將平整化後的遮罩轉換為唯一幾何多邊形 (Raster to Vector)...")
+        features = []
+        
+        # 將整張 master_mask 一次性轉為不重疊的多邊形
+        for geom, val in shapes(master_mask, mask=(master_mask > 0), transform=affine):
+            val = int(val)
+            if val > 0: 
+                original_data = masks_sorted[val - 1]
+                features.append({
+                    'geometry': shape(geom),
+                    'properties': {
+                        'sam_id': val,
+                        'area_pixels': original_data['area'],
+                        'habitat_type': '待分類 (SAM)', 
+                    }
+                })
 
-        # 建立 GeoDataFrame
         gdf = gpd.GeoDataFrame.from_features(features, crs=crs)
 
-        # 系統級防呆與座標標準化：確保回傳的一律是 EPSG:4326
+        # 過濾掉那些因為被完全覆蓋而變得極小的碎片
+        gdf = gdf[gdf.geometry.area > 0.0]
+
+        # 系統級防呆：確保回傳的一律是 EPSG:4326
         if gdf.crs != "EPSG:4326":
             gdf = gdf.to_crs("EPSG:4326")
 
@@ -84,34 +95,34 @@ class SAMHabitatSegmenter:
         return gdf
 
 if __name__ == "__main__":
-    from habitat_classifier import HabitatClassifier # 匯入剛寫好的分類器
+    from habitat_classifier import HabitatClassifier 
     
-    TEST_IMAGE = "../data/habitat_sample_nlsc.tif" 
+    # 請確保資料夾結構與影像檔名符合你的本機環境
+    TEST_IMAGE = "./data/habitat_sample_nlsc_6.tif" 
     
     try:
         # 1. 啟動 SAM 切割器
         segmenter = SAMHabitatSegmenter()
         sam_gdf = segmenter.process_image_to_polygons(TEST_IMAGE)
         
-        # 2. 啟動 機器學習分類器
+        # 2. 啟動機器學習分類器並載入你的 QGIS 真實標註檔
         classifier = HabitatClassifier()
+        # 注意：假設你剛才在 QGIS 中存成 training_samples.gpkg
+        classifier.train_from_samples("./data/training_samples.gpkg", TEST_IMAGE) 
+        
+        # 3. 進行預測
         final_gdf = classifier.predict(sam_gdf, TEST_IMAGE)
         
-        # 3. 檢視最終成果
+        # 4. 檢視最終成果
         print("\n====== 🚀 Ver 2.1 Model Tier 產出成果 ======")
         print(final_gdf[['sam_id', 'habitat_type', 'geometry']].head(10))
         
-        # 印出分類統計
         print("\n[*] 棲地分類統計：")
         print(final_gdf['habitat_type'].value_counts())
         
-        # 儲存為 GeoJSON
+        # 儲存成果供 QGIS 視覺化檢查
         final_gdf.to_file("ver2.1_final_output.geojson", driver="GeoJSON")
         print("\n[+] 成果已儲存為 ver2.1_final_output.geojson")
-        
-        # 確認座標系統是否為 EPSG:4326
-        print("\n[*] 最終座標系統：")
-        print(final_gdf.crs)
         
     except Exception as e:
         print(f"[-] 測試發生錯誤: {e}")

@@ -19,10 +19,11 @@ DEFAULT_BBOX = [120.701, 24.180, 120.711, 24.190]
 TARGET_TABLE = "habitats"
 
 HABITAT_MAP = {
-    0: "水體/河流",
-    1: "高植生/林地",
-    2: "都市建物/人造設施",
-    3: "裸露地/工地"
+    0: "水體/河流", 
+    1: "高植生/林地", 
+    2: "都市建物/人造設施", 
+    3: "裸露地/農田",
+    4: "草生地"
 }
 
 def run_integration_pipeline(bbox: List[float], source: str = "sentinel", clear_old_data: bool = False) -> Tuple[bool, str]:

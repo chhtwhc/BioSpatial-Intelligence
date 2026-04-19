@@ -102,7 +102,7 @@ def fetch_nlsc_image(
 
 if __name__ == "__main__":
     # 單獨測試抓圖功能 (與 Sentinel 使用相同的臺中測試 BBOX)
-    test_bbox = [120.701, 24.180, 120.711, 24.190]
+    test_bbox = [121.517544,24.851316,121.574535,24.893677] 
     result_path = fetch_nlsc_image(bbox=test_bbox)
     
     if result_path:

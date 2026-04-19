@@ -8,11 +8,13 @@ class HabitatClassifier:
         print("[*] 正在初始化輕量棲地分類器 (Random Forest)...")
         self.model = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42)
         
+        # 已包含新增的「草生地」
         self.target_names = {
             0: "水體/河流", 
             1: "高植生/林地", 
             2: "都市建物/人造設施", 
-            3: "裸露地/工地"
+            3: "裸露地/工地",
+            4: "草生地"
         }
 
     def train_from_samples(self, sample_geojson_path: str, image_path: str):
@@ -23,36 +25,54 @@ class HabitatClassifier:
         # 假設標註檔案中有一個欄位叫做 'class_id'
         y_train = samples_gdf['class_id'].values
         
-        print("[*] 正在萃取訓練樣本的光學特徵...")
-        stats_R = zonal_stats(samples_gdf, image_path, band=1, stats="mean", nodata=0)
-        stats_G = zonal_stats(samples_gdf, image_path, band=2, stats="mean", nodata=0)
-        stats_B = zonal_stats(samples_gdf, image_path, band=3, stats="mean", nodata=0)
+        # ------------------ 第一處：訓練時的特徵萃取 ------------------
+        print("[*] 正在萃取訓練樣本的光學與紋理特徵 (Mean + Std)...")
+        stats_R = zonal_stats(samples_gdf, image_path, band=1, stats="mean std", nodata=0)
+        stats_G = zonal_stats(samples_gdf, image_path, band=2, stats="mean std", nodata=0)
+        stats_B = zonal_stats(samples_gdf, image_path, band=3, stats="mean std", nodata=0)
 
         features = []
         for r, g, b in zip(stats_R, stats_G, stats_B):
-            features.append([r['mean'], g['mean'], b['mean']])
+            r_mean = r['mean'] if r['mean'] is not None else 128
+            g_mean = g['mean'] if g['mean'] is not None else 128
+            b_mean = b['mean'] if b['mean'] is not None else 128
+            
+            r_std = r['std'] if r['std'] is not None else 0
+            g_std = g['std'] if g['std'] is not None else 0
+            b_std = b['std'] if b['std'] is not None else 0
+            
+            # 將 6 個特徵組合起來餵給模型
+            features.append([r_mean, g_mean, b_mean, r_std, g_std, b_std])
+        # --------------------------------------------------------------
 
         X_train = np.array(features)
         
         print("[*] 開始訓練隨機森林模型...")
         self.model.fit(X_train, y_train)
-        print(f"[+] 訓練完成！模型已學習了 {len(X_train)} 筆真實地貌特徵。")
+        print(f"[+] 訓練完成！模型已學習了 {len(X_train)} 筆真實地貌特徵 (包含紋理)。")
 
     def predict(self, gdf: gpd.GeoDataFrame, image_path: str) -> gpd.GeoDataFrame:
         """接收 SAM 產出的 GeoDataFrame，萃取影像特徵並進行分類"""
-        # ... (此處保留你原本寫好的 predict 邏輯，完全不需要修改) ...
-        print("[*] 正在進行空間特徵萃取 (Zonal Statistics)...")
         
-        stats_R = zonal_stats(gdf, image_path, band=1, stats="mean", nodata=0)
-        stats_G = zonal_stats(gdf, image_path, band=2, stats="mean", nodata=0)
-        stats_B = zonal_stats(gdf, image_path, band=3, stats="mean", nodata=0)
+        # ------------------ 第二處：預測時的特徵萃取 ------------------
+        # 注意這裡使用的是 SAM 傳進來的 'gdf'
+        print("[*] 正在對 SAM 產生的多邊形進行特徵萃取 (Mean + Std)...")
+        stats_R = zonal_stats(gdf, image_path, band=1, stats="mean std", nodata=0)
+        stats_G = zonal_stats(gdf, image_path, band=2, stats="mean std", nodata=0)
+        stats_B = zonal_stats(gdf, image_path, band=3, stats="mean std", nodata=0)
 
         features = []
         for r, g, b in zip(stats_R, stats_G, stats_B):
-            r_val = r['mean'] if r['mean'] is not None else 128
-            g_val = g['mean'] if g['mean'] is not None else 128
-            b_val = b['mean'] if b['mean'] is not None else 128
-            features.append([r_val, g_val, b_val])
+            r_mean = r['mean'] if r['mean'] is not None else 128
+            g_mean = g['mean'] if g['mean'] is not None else 128
+            b_mean = b['mean'] if b['mean'] is not None else 128
+            
+            r_std = r['std'] if r['std'] is not None else 0
+            g_std = g['std'] if g['std'] is not None else 0
+            b_std = b['std'] if b['std'] is not None else 0
+            
+            features.append([r_mean, g_mean, b_mean, r_std, g_std, b_std])
+        # --------------------------------------------------------------
 
         X_predict = np.array(features)
         

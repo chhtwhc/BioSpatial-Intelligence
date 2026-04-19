@@ -217,6 +217,9 @@ __marimo__/
 *.gpkg
 *.kml
 *.kmz
+*.qgz
+*.gpkg-shm
+*.gpkg-wal
 
 # AI 模型權重檔案
 weights/

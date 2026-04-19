@@ -205,3 +205,19 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# 空間圖資與中繼資料
+*.tif
+*.aux.xml
+*.geojson
+*.shp
+*.shx
+*.dbf
+*.prj
+*.gpkg
+*.kml
+*.kmz
+
+# AI 模型權重檔案
+weights/
+*.pth

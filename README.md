@@ -1,174 +1,83 @@
-# BioSpatial-Intelligence
+# BioSpatial-Intelligence (Ver 2.1)
 
-本專案旨在建立一個從航照圖辨識到前端視覺化的完整生態監測系統。開發核心在於模組化設計與標準化工程流程。
-
----
-
-## 1. High-Level 系統架構 (Three-Tier Architecture)
-
-請將本專案視為三個相互獨立且透過特定格式溝通的模組，而非單一程式。
-
-| 層級 | 組件 | 職責說明 | 溝通邊界 |
-| :--- | :--- | :--- | :--- |
-| **資料層 (Data Tier)** | PostGIS, AI Scripts | 負責將航照圖轉換為空間多邊形並持久化儲存。 | 辨識腳本執行完畢並寫入資料庫後任務即結束。 |
-| **邏輯層 (Logic Tier)** | FastAPI / C# | 接收前端請求（如座標範圍），下達 SQL Spatial 查詢並回傳結果。 | 僅處理 JSON/GeoJSON，不負責底圖渲染或 AI 訓練。 |
-| **表現層 (Presentation Tier)** | Leaflet / OpenLayers | 提供地圖互動介面，將後端資料渲染為圖層與統計圖表。 | 專注於使用者互動與視覺化呈現。 |
+本專案是一個整合「衛星/航照影像自動化獲取」、「AI 空間實體分割與語意分類」以及「動態 WebGIS 統計視覺化」的端到端生態空間監測系統。系統採用嚴謹的模組化三層架構，旨在解決生態檢核中人工辨識耗時、空間資料標準不一的核心痛點。
 
 ---
 
-## 2. 專案經理視角：執行原則 (PM Perspective)
+## 📂 專案目錄結構
 
-### 🚀 定義 MVP (最小可行性產品)
-第一個里程碑的目標是**「打通全鏈路」**，而非追求完美的辨識精度。
-
-1.  **捨棄完美：** 初期可使用 QGIS 手繪多邊形（假資料）匯入資料庫進行測試。
-2.  **打通水管：** 優先完成「前端框選 -> 傳給後端 -> 資料庫計算面積 -> 回傳前端顯示」的完整流程。
-3.  **替換核心：** 只要流程能動，後續再將假資料替換為 AI 辨識的真實數據。
-
-### 接口先行 (API-First Design)
-在開發前必須明確定義 **資料交換格式 (Data Contract)**：
-* **前端傳入：** 必須是 `EPSG:4326` 投影之 GeoJSON。
-* **後端回傳：** 必須包含 `habitat_type` 與 `area_sqm` 兩個核心欄位。
-> 定義好規範後，前後端即可平行開發，避免在開發過程中迷失於實作細節。
-
----
-
-## 3. 主任工程師視角：必須遵守的工程規範 (Engineering Standards)
-
-### 📍 確立單一座標參考系統 (CRS)
-空間資訊專案最常見的災難是座標系混亂。全專案強制規定：
-* **儲存與傳輸：** 一律使用 **EPSG:4326 (WGS84 經緯度)**。
-* **精確計算：** 若需進行面積計算或環域分析，應在後端或資料庫層級即時轉換為台灣適用的投影（如 **EPSG:3826 / TWD97**），計算完畢後再轉回 EPSG:4326 交給前端。
-
-### 📦 環境隔離與依賴管理
-嚴禁在電腦全域環境安裝套件，避免相依性衝突。
-* **隔離工具：** 請嚴格使用 `venv`、`conda` 或 `Docker`。
-* **模組隔離：** AI 訓練（如 PyTorch）與後端 API（如 FastAPI）的環境必須分開管理。
-
-### 🌿 版本控制 (Git)
-系統開發不再是單一腳本，請養成良好的版本控制習慣：
-* **建立 Repository：** 專案啟動時即建立 Git 儲存庫。
-* **細粒度提交 (Commit)：** 每完成一個小功能（例如：寫好一個 API 端點）就進行一次 Commit。
+BioSpatial-Intelligence/
+├── api/                # 邏輯層 (Logic Tier): FastAPI 後端服務
+│   ├── main.py         # API 路由、業務邏輯與分析觸發入口
+│   ├── models.py       # SQLAlchemy 與 GeoAlchemy2 空間資料模型
+│   └── schemas.py      # Pydantic 資料驗證與 GeoJSON 規範定義
+├── data/               # 資料層 (Data Tier): 數據管線與外部介接
+│   ├── main_pipeline.py# 自動化分析管線總控 (ETL Orchestrator)
+│   ├── sentinel_api_client.py # Sentinel-2 衛星影像自動抓取
+│   ├── nlsc_api_client.py     # NLSC 航照正射影像自動抓取
+│   ├── image_processor.py     # 基礎影像處理與 K-Means 驗證工具
+│   └── database_manager.py    # PostGIS 空間資料存取與維護管理
+├── model/              # AI 模型層: 核心辨識引擎
+│   ├── sam_processor.py      # Segment Anything Model 實體分割與拓樸平整化
+│   └── habitat_classifier.py # Random Forest 棲地屬性語意分類
+├── frontend/           # 表現層 (Presentation Tier): Leaflet 互動介面
+├── init_db.py          # 資料庫初始化：啟用 PostGIS 與自動建表
+└── .env                # 環境變數配置 (資料庫連線金鑰)
 
 ---
 
-## 4. 資料層 (Data Tier) 執行路徑圖
+## 🏗️ 三層架構深度解析
 
-### 階段一：基礎設施建置與假資料驗證 (MVP 核心)
-*本階段重點：確保「儲存容器」具備空間資料處理能力，暫不涉及 AI。*
+### 1. 資料層 (Data Tier) - 系統的數據引擎
+這是本系統最核心的自動化部分，負責處理從「原始光學數據」到「地理空間特徵」的轉化過程：
+* 影像自動化獲取 (Automated Acquisition)：
+    * Sentinel-2：透過 Microsoft Planetary Computer 介接，支援雲遮蔽率篩選與動態 BBOX 裁切。
+    * NLSC (國土測繪中心)：利用 WMS 服務獲取 20cm/50cm 極高解析度正射影像。
+* 全自動分析管線 (main_pipeline.py)：
+    * 負責調度 Data Tier 的獲取模組與 Model Tier 的分析模組。
+    * 實作完整的 ETL 流程：輸入座標 -> 影像下載 -> AI 分割/分類 -> 幾何清洗 -> 入庫 PostGIS。
+* 空間資料庫管理 (database_manager.py)：
+    * 確保所有產出的幾何物件均符合 EPSG:4326 標準。
+    * 管理資料庫事務 (Transactions)，支援多邊形的 Append、Truncate 與 Reset 操作。
 
-1.  **建置空間資料庫**
-    * 部署 PostgreSQL 並啟用 PostGIS 擴充套件（建議使用 Docker）。
-2.  **產出測試用假資料**
-    * 使用 QGIS 繪製多邊形並標註屬性，匯出為 `GeoJSON`。
-3.  **打通資料載入 (Load) 管線**
-    * 使用 `GeoPandas`、`SQLAlchemy` 驗證資料能正確寫入資料庫。
+### 2. 邏輯層 (Logic Tier) - 空間運算核心
+* FastAPI 驅動：提供高效能的非同步 API，供前端執行即時分析請求。
+* 空間精確度運算：
+    * 即時投影轉換：傳輸使用 WGS84，但計算面積時，後端會自動下達 ST_Transform(geom, 3826) 指令，轉為 TWD97 投影以符合台灣法定面積計算精確度。
+    * 動態過濾：利用 PostGIS 的空間索引 (GIST) 實現高效的 BBOX 範圍查詢。
 
-### 階段二：影像處理與向量化轉型 (Transform 核心)
-*本階段重點：解決「網格 (Raster) 轉向量 (Vector)」的空間轉型問題。*
-
-1.  **簡化版影像分割**
-    * 使用 OpenCV 或 KMeans 將航照圖切分為不同色塊區域。
-2.  **網格轉向量 (Raster to Vector)**
-    * 使用 `rasterio.features.shapes` 將像素特徵萃取為多邊形幾何。
-
-### 階段三：自動化資料管線整合 (ETL Integration)
-*本階段重點：將影像處理與資料庫寫入整合成自動化管線。*
-
-1.  **整合腳本流程：** `輸入航照圖` -> `影像分類` -> `網格轉向量` -> `賦予屬性` -> `寫入 PostGIS`。
-2.  **座標系統 (CRS) 標準化：** 確保所有資料在寫入前皆轉為 `EPSG:4326`。
-
----
-
-## 5. 邏輯層 (Logic Tier) 執行路徑圖
-
-### 階段一：ORM 對接與 Mock Data 驗證 (MVP 啟動)
-*本階段重點：打通後端與 PostGIS 的「水管」，確保能正確讀取資料層產出的測試多邊形。*
-
-1.  **環境隔離與連線配置**
-    * 使用 `venv` 或 `Docker` 建立隔離環境。
-    * 利用 `SQLAlchemy` 與 `GeoAlchemy2` 建立與 PostGIS 的連線池。
-2.  **定義空間資料模型 (Model)**
-    * 對應資料層的 `habitats` 表格，建立 Python 類別。
-    * **核心欄位：** `id`, `habitat_type`, `geom` (幾何型態須指定為 4326)。
-3.  **基礎 CRUD API 開發**
-    * 開發 `GET /habitats` 接口：直接從資料庫抓取 WKB 格式並轉為 GeoJSON 回傳。
-    * **驗證指標：** 透過 Postman 請求 API，能獲得符合 EPSG:4326 規範的 GeoJSON 數據。
-
-### 階段二：空間分析運算邏輯 (Business Logic)
-*本階段重點：實現 README 要求的「精確計算」與「座標轉換」邏輯。*
-
-1.  **座標參考系統 (CRS) 自動切換機制**
-    * **運作邏輯：** 當接收到面積計算請求時，邏輯層須下達 SQL 指令，將 `EPSG:4326` 即時轉型 (Cast) 為 `EPSG:3826 (TWD97)` 進行精確度量。
-    * **範例邏輯：** `ST_Area(ST_Transform(geom, 3826))`。
-2.  **核心欄位處理：area_sqm 與 habitat_type**
-    * 實作面積計算邏輯，確保回傳 JSON 包含 `area_sqm` 欄位。
-    * 處理棲地類型字串，確保輸出格式統一（例如：次生林、水體）。
-3.  **空間範圍查詢 (Spatial Query)**
-    * 開發接收前端框選座標 (Bounding Box) 的接口，利用 `ST_Intersects` 篩選範圍內的多邊形。
-
-### 階段三：API 合約強化與自動化管線整合
-*本階段重點：落實 API-First 設計原則，確保系統穩定性。*
-
-1.  **資料交換格式 (Data Contract) 驗證**
-    * 使用 `Pydantic` 定義輸入與輸出的 Schema。
-    * **強制檢查：** 傳入數據必須是 `EPSG:4326` 的 GeoJSON。
-2.  **效能優化：空間索引與快取**
-    * 確保查詢語法能觸發 PostGIS 的 **GIST 索引**。
-    * 針對靜態棲地數據實作快取機制，減少資料庫負擔。
-3.  **Git 版本控制與細粒度提交**
-    * 針對每個 API 端點與邏輯修正進行細粒度 Commit。
+### 3. 表現層 (Presentation Tier) - 生態監測儀表板
+* 動態 WebGIS：基於 Leaflet.js，支援多底圖切換（衛星影像/標準地圖）。
+* 互動式分析：使用者可在地圖上框選區域，直接觸發後端 main_pipeline.py 的 AI 分析流程。
+* 自動化統計：根據當前地圖視野，動態統計各棲地類型的面積（ha）與占比。
 
 ---
 
-## 6. 表現層 (Presentation Tier) 執行路徑圖
+## 🤖 AI 推論鏈 (Model Tier)
 
-### 階段一：地圖基礎設施與底圖渲染 (MVP 啟動)
-*本階段重點：建立 Web GIS 容器，確保能顯示基礎底圖。*
-
-1.  **環境搭建與 Leaflet 初始化**
-    * 建立基礎 HTML5/CSS3 模板。
-    * 導入 Leaflet.js 核心庫。
-    * 設置地圖容器 (Div) 並定位至台灣台中目標區域。
-2.  **多底圖切換機制 (Base Maps)**
-    * 載入 OpenStreetMap (OSM) 作為標準底圖。
-    * 導入衛星影像底圖 (如 Esri World Imagery)，便於比對 AI 辨識結果。
-
-### 階段二：非同步資料串接與動態渲染 (Data Mapping)
-*本階段重點：串接 FastAPI /habitats API，將 GeoJSON 多邊形繪製在地圖上。*
-
-1.  **API 非同步請求實作**
-    * 使用 `fetch()` 呼叫後端 API。
-    * 實作 Loading 狀態提示，處理資料讀取間隙。
-2.  **空間資料樣式化 (Styling & Classification)**
-    * 根據 `habitat_type` 屬性設定不同的顏色（例如：水體->藍色、林地->綠色）。
-    * 實作透明度控制，確保能看清底圖。
-3.  **互動彈窗 (Popups & Tooltips)**
-    * 點擊多邊形時彈出資訊框，顯示該區域的「棲地類型」與「精確面積 (m²)」。
-
-### 階段三：進階空間互動與統計分析 (Spatial Interaction)
-*本階段重點：利用邏輯層的空間查詢能力，實作動態篩選。*
-
-1.  **地圖框選查詢 (BBOX Filter)**
-    * 監聽地圖移動事件 (`moveend`)，自動獲取當前視野的座標範圍。
-    * 將範圍傳送至 API，實現「看哪裡、顯示哪裡」的動態過濾。
-2.  **儀表板統計 (Statistics Dashboard)**
-    * 利用 `Chart.js` 或單純 HTML 列表，彙整當前視野內各棲地的面積佔比。
-3.  **Git 版本控制**
-    * 針對地圖初始化、API 串接、交互邏輯分別進行細粒度 Commit。
+系統整合了當前最強大的零樣本分割與經典機器學習技術：
+1.  SAM (Segment Anything Model)：
+    * 由 Meta 開發的基礎模型，執行實體分割。
+    * 本系統實作了「畫家演算法 (Painter's Algorithm)」進行幾何平整化，解決遮罩重疊導致的面積重算問題。
+2.  Random Forest 分類器：
+    * 萃取區域內的多光譜均值 (Mean) 與標準差 (Std) 作為紋理特覽。
+    * 自動標註「林地」、「水體」、「建物」、「裸露地」、「草生地」等五大類生態屬性。
 
 ---
 
-> ### 🚀 邏輯層開發心法 (必須遵守)
->
-> | 動作項目 | 執行標準 (README 規範) |
-> | :--- | :--- |
-> | **傳輸座標系** | 始終維持 **EPSG:4326** |
-> | **面積計算** | 必須轉換為 **EPSG:3826** 運算後回傳 |
-> | **輸出格式** | 必須包含 **habitat_type** 與 **area_sqm** |
-> | **環境規範** | 嚴禁全域安裝，必須使用環境隔離工具 |
+## 📍 工程規範與標準
+
+* 空間參考系統 (CRS)：
+    * 存儲與 API 傳輸：EPSG:4326 (WGS84)。
+    * 科學面積計算：EPSG:3826 (TWD97)。
+* 環境規範：
+    * 採用 venv 隔離開發環境，金鑰資訊嚴格保存於 .env 並透過 .gitignore 排除。
 
 ---
 
-## 7. 後續擴充 (Post-MVP)
-當三層架構全部串接完畢後，未來僅需更換資料層的 AI 模型，表現層即可自動更新為更精準的生態圖層。
+## 🚀 未來開發藍圖 (Ver 2.2)
+
+本專案的下一個里程碑將聚焦於「線上應用程式化」：
+* SaaS 化部署：將現有的三層架構容器化 (Dockerized)，部署至雲端服務 (如 GCP 或 AWS)。
+* 全雲端操作：使用者只需透過瀏覽器，無需安裝任何本地開發環境或資料庫，即可在全球任何角落進行生態空間分析。
+* 使用者帳戶體系：支援分析結果的雲端儲存與跨裝置同步。

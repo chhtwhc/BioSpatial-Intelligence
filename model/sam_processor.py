@@ -7,23 +7,34 @@ import geopandas as gpd
 from shapely.geometry import shape
 from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
 import time
+import os
 
 class SAMHabitatSegmenter:
-    def __init__(self, checkpoint_path="weights/sam_vit_b_01ec64.pth", model_type="vit_b"):
+    # 將 checkpoint_path 預設值改為 None，讓我們在程式內部動態決定
+    def __init__(self, checkpoint_path=None, model_type="vit_b"):
         """初始化 SAM 模型並載入 GPU"""
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"[*] 系統啟動：正在將 SAM 模型 ({model_type}) 載入至 {self.device.upper()}...")
+        
+        # 動態取得絕對路徑，免疫 uvicorn 執行位置的問題
+        if checkpoint_path is None:
+            # 取得 sam_processor.py 所在的資料夾路徑 (即 model/)
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            # 組合出正確的權重檔絕對路徑
+            checkpoint_path = os.path.join(current_dir, "weights", f"sam_{model_type}_01ec64.pth")
+            
+        print(f"[*] 準備載入權重檔: {checkpoint_path}")
         
         # 註冊並載入模型
         self.sam = sam_model_registry[model_type](checkpoint=checkpoint_path)
         self.sam.to(device=self.device)
         
-        # 🌟 亮點 1：全域測繪強化版參數 (解決大面積空白問題)
+        # 全域測繪參數 (解決大面積空白問題)
         self.mask_generator = SamAutomaticMaskGenerator(
             model=self.sam,
             points_per_side=64,           # 掃描網格變密 4 倍
-            pred_iou_thresh=0.6,         # 容忍更多邊界稍模糊的地貌
-            stability_score_thresh=0.70,  # 讓模型不用那麼有把握也敢輸出遮罩
+            pred_iou_thresh=0.6,          # 容忍更多邊界稍模糊的地貌
+            stability_score_thresh=0.80,  # 讓模型不用那麼有把握也敢輸出遮罩
             min_mask_region_area=10,      # 保留較小的斑塊
             crop_n_layers=1,              # 啟動影像分塊掃描，強迫放大檢視細節
             crop_n_points_downscale_factor=2
@@ -84,10 +95,17 @@ class SAMHabitatSegmenter:
 
         gdf = gpd.GeoDataFrame.from_features(features, crs=crs)
 
-        # 過濾掉那些因為被完全覆蓋而變得極小的碎片
-        gdf = gdf[gdf.geometry.area > 0.0]
+        # 🌟 核心修正：自動修復無效幾何 + 過濾極小碎片
+        # 1. 修復自相交的多邊形 (ST_MakeValid 的 Python 版)
+        gdf['geometry'] = gdf['geometry'].buffer(0) 
+        
+        # 2. 過濾掉面積過小的碎片 (避免 ST_Simplify 報錯)
+        # 在 EPSG:4326 下，0.00000001 約為 0.1 平方公尺
+        gdf = gdf[gdf.geometry.area > 1e-8] 
+        
+        # 3. 確保只保留 Polygon 或 MultiPolygon (移除可能產生的線或點)
+        gdf = gdf[gdf.geometry.type.isin(['Polygon', 'MultiPolygon'])]
 
-        # 系統級防呆：確保回傳的一律是 EPSG:4326
         if gdf.crs != "EPSG:4326":
             gdf = gdf.to_crs("EPSG:4326")
 

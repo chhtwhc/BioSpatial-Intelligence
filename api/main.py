@@ -29,8 +29,8 @@ STATIC_HABITAT_CACHE = {}
 
 @app.get("/habitats", response_model=schemas.FeatureCollection)
 def get_habitats(
-    bbox: str = Query(None, description="範圍查詢框限制"),
-    source: str = Query("sentinel", description="影像來源"),
+    bbox: str = Query(None),
+    source: str = Query("sentinel"),
     db: Session = Depends(database.get_db)
 ):
     global STATIC_HABITAT_CACHE
@@ -43,7 +43,10 @@ def get_habitats(
         models.Habitat.source,
         func.ST_Area(func.ST_Transform(models.Habitat.geom, 3826)).label('area_sqm'),
         func.ST_AsGeoJSON(func.ST_Simplify(models.Habitat.geom, 0.00001)).label('geojson_str')
-    ).filter(models.Habitat.source == source)
+    ).filter(
+        models.Habitat.source == source,
+        models.Habitat.geom.isnot(None) # 🌟 核心修正 1：過濾掉資料庫中的空值
+    )
 
     if bbox:
         try:
@@ -56,21 +59,23 @@ def get_habitats(
     results = query.all()
     features = []
     for row in results:
-        features.append({
-            "type": "Feature",
-            "properties": {
-                "id": row.id,
-                "habitat_type": row.habitat_type,
-                "area_sqm": round(row.area_sqm, 2),
-                "source": row.source
-            },
-            "geometry": json.loads(row.geojson_str)
-        })
+        # 🌟 核心修正 2：防禦性檢查，確保只有有效的 GeoJSON 字串才會被解析
+        if row.geojson_str:
+            try:
+                features.append({
+                    "type": "Feature",
+                    "properties": {
+                        "id": row.id,
+                        "habitat_type": row.habitat_type,
+                        "area_sqm": round(row.area_sqm, 2),
+                        "source": row.source
+                    },
+                    "geometry": json.loads(row.geojson_str)
+                })
+            except (json.JSONDecodeError, TypeError):
+                continue # 跳過毀損的幾何資料
         
-    response_data = {"type": "FeatureCollection", "features": features}
-    if not bbox:
-        STATIC_HABITAT_CACHE[source] = response_data
-    return response_data
+    return {"type": "FeatureCollection", "features": features}
 
 @app.post("/analyze")
 def start_analysis(
@@ -101,7 +106,7 @@ def start_analysis(
     
     return {"status": "success", "message": message, "bbox": dynamic_bbox}
 
-# --- [新增] 全域清空接口 ---
+# --- 全域清空接口 ---
 @app.delete("/habitats/all")
 def clear_all_habitats(db: Session = Depends(database.get_db)):
     """清空資料庫中所有的棲地紀錄並重設畫布。"""

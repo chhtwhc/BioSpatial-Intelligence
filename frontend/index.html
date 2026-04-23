@@ -7,8 +7,11 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
     <style>
+        /* 基礎佈局：地圖滿版 */
         body { margin: 0; padding: 0; font-family: 'Segoe UI', system-ui, sans-serif; }
         #map { height: 100vh; width: 100%; }
+        
+        /* 浮動資訊面板：控制項與儀表板 */
         .info-panel {
             position: absolute; top: 10px; right: 10px; z-index: 1000;
             background: rgba(255, 255, 255, 0.95); padding: 15px 20px;
@@ -16,11 +19,13 @@
             min-width: 280px; max-width: 320px;
         }
         .info-panel h4 { margin: 0 0 10px 0; border-bottom: 2px solid #eee; padding-bottom: 8px; }
+        
+        /* 控制元件樣式 */
         .source-control { margin-bottom: 12px; padding: 10px; background: #f8f9fa; border-radius: 8px; border: 1px solid #e9ecef; }
         .source-control label { display: block; font-size: 0.85em; font-weight: bold; margin-bottom: 5px; }
         #source-selector { width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ddd; margin-bottom: 10px; }
         
-        /* [新增] 清空按鈕樣式 */
+        /* 破壞性操作按鈕樣式 */
         .danger-btn {
             width: 100%; padding: 8px; background: #fff5f5; color: #c53030;
             border: 1px solid #feb2b2; border-radius: 4px; cursor: pointer;
@@ -29,6 +34,7 @@
         .danger-btn:hover { background: #fff5f5; border-color: #f56565; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
         .danger-btn:active { background: #fed7d7; }
 
+        /* 系統狀態列與圖例統計樣式 */
         #status { font-size: 0.85em; margin-bottom: 12px; font-weight: bold; padding: 6px; border-radius: 4px; }
         .opacity-control { margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px dashed #ccc; }
         #opacity-slider { width: 100%; }
@@ -55,47 +61,79 @@
         </div>
         <div id="dashboard"></div>
     </div>
+    
     <div id="map"></div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
     <script>
-        // --- 1. 初始化與位置記憶 ---
+        // ---------------------------------------------------------
+        // 1. 初始化與狀態記憶 (Initialization & State Persistence)
+        // ---------------------------------------------------------
+        
+        // 定義底圖服務 (Tile Layers)
         const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' });
         const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { attribution: 'Esri' });
 
+        // 從瀏覽器 LocalStorage 讀取上次的使用者視角，提供連續的體驗
         const savedCenter = JSON.parse(localStorage.getItem('biospatial_center')) || [24.185, 120.705];
         const savedZoom = parseInt(localStorage.getItem('biospatial_zoom')) || 15;
 
+        // 實例化地圖
         const map = L.map('map', { center: savedCenter, zoom: savedZoom, layers: [satelliteLayer] });
         L.control.layers({ "衛星影像": satelliteLayer, "標準地圖": osmLayer }).addTo(map);
 
-        // --- 2. 圖層與狀態 ---
-        const habitatColors = { "水體/河流": "#2b8cbe", "高植生/林地": "#238b45", "都市建物/人造設施": "#737373", "裸露地/農田": "#8c510a", "草生地": "#a6d96a" };
+        // ---------------------------------------------------------
+        // 2. 圖層定義與資料綁定 (Layer Definitions)
+        // ---------------------------------------------------------
+        
+        // 定義系統的標準地貌色彩字典，需與後端 Random Forest 分類結果對應
+        const habitatColors = { 
+            "水體/河流": "#2b8cbe", 
+            "高植生/林地": "#238b45", 
+            "都市建物/人造設施": "#737373", 
+            "裸露地/工地": "#8c510a", 
+            "草生地": "#a6d96a" 
+        };
         let currentOpacity = 0.5, currentSource = "sentinel";
 
+        // 建立 GeoJSON 圖層，定義各區塊的樣式與點擊彈出視窗 (Popup) 內容
         let geojsonLayer = L.geoJSON(null, {
-            style: (f) => ({ fillColor: habitatColors[f.properties.habitat_type] || "#bdc3c7", weight: 1, color: '#ffffff', fillOpacity: currentOpacity }),
+            style: (f) => ({ 
+                fillColor: habitatColors[f.properties.habitat_type] || "#bdc3c7", 
+                weight: 1, 
+                color: '#ffffff', 
+                fillOpacity: currentOpacity 
+            }),
             onEachFeature: (f, l) => l.bindPopup(`<b>${f.properties.habitat_type}</b><br>面積：${f.properties.area_sqm.toLocaleString()} m²<br>來源：${f.properties.source.toUpperCase()}`)
         }).addTo(map);
 
+        // 初始化繪圖工具 (Leaflet.draw)
         const drawnItems = new L.FeatureGroup();
         map.addLayer(drawnItems);
-        const drawControl = new L.Control.Draw({ edit: { featureGroup: drawnItems }, draw: { polygon: true, rectangle: true, polyline: false, circle: false, circlemarker: false, marker: false } });
+        const drawControl = new L.Control.Draw({ 
+            edit: { featureGroup: drawnItems }, 
+            // 限制僅能繪製多邊形與矩形，對應後端 ST_Intersects 與裁切邏輯
+            draw: { polygon: true, rectangle: true, polyline: false, circle: false, circlemarker: false, marker: false } 
+        });
         map.addControl(drawControl);
 
-        // --- 3. [新增] 清空按鈕事件 ---
+        // ---------------------------------------------------------
+        // 3. 事件監聽：清空資料庫 (System Reset Event)
+        // ---------------------------------------------------------
         document.getElementById('clear-db-btn').addEventListener('click', async () => {
+            // 防呆確認：避免誤觸刪除重要分析成果
             if (!confirm("⚠️ 確定要永久刪除資料庫中的所有棲地資料嗎？\n此動作將清空地圖上的所有分析結果。")) return;
             
             const statusEl = document.getElementById('status');
             statusEl.innerText = "🗑️ 正在執行全域清空...";
             
             try {
+                // 發送 DELETE 請求呼叫 main.py 中的 clear_all_habitats 端點
                 const response = await fetch(`http://127.0.0.1:8000/habitats/all`, { method: 'DELETE' });
                 if (!response.ok) throw new Error("清空失敗");
                 
-                // 清空 Leaflet 圖層
+                // 清空前端記憶體與畫面渲染
                 geojsonLayer.clearLayers();
                 updateDashboard([]);
                 statusEl.innerText = "✅ 資料庫已完全清空";
@@ -106,19 +144,31 @@
             }
         });
 
-        // --- 4. 基礎連動邏輯 ---
+        // ---------------------------------------------------------
+        // 4. 事件監聽：觸發 AI 分析 (Analysis Trigger Event)
+        // ---------------------------------------------------------
         map.on(L.Draw.Event.CREATED, async function (e) {
+            // 獲取使用者繪製的幾何圖形並轉為標準 GeoJSON 格式
             const geojson = e.layer.toGeoJSON();
-            drawnItems.clearLayers();
+            drawnItems.clearLayers(); // 取得座標後立即清除繪圖痕跡
+            
             const statusEl = document.getElementById('status');
             statusEl.innerText = `⏳ 正在分析 ${currentSource.toUpperCase()} 影像...`;
             statusEl.style.backgroundColor = "#fff3cd";
 
             try {
-                const res = await fetch(`http://127.0.0.1:8000/analyze?source=${currentSource}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(geojson) });
-                if (!res.ok) throw new Error("分析失敗");
+                // 發送 POST 請求給 main.py 的 /analyze 端點，啟動 ETL 分析管線
+                const res = await fetch(`http://127.0.0.1:8000/analyze?source=${currentSource}`, { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify(geojson) 
+                });
+                if (!res.ok) throw new Error("分析失敗或超出服務範圍");
+                
                 statusEl.innerText = `✅ 分析完成！`;
                 statusEl.style.backgroundColor = "#d4edda";
+                
+                // 分析完成後，主動要求刷新當前視野內的圖資
                 fetchHabitatsInView();
             } catch (err) {
                 statusEl.innerText = `❌ ${err.message}`;
@@ -126,18 +176,31 @@
             }
         });
 
+        // ---------------------------------------------------------
+        // 5. 資料獲取與視野連動 (Data Fetching & View Sync)
+        // ---------------------------------------------------------
         async function fetchHabitatsInView() {
+            // 取得當前地圖的地理邊界 (Bounding Box)
             const bounds = map.getBounds();
             const bboxString = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
+            
             try {
+                // 向後端請求該範圍內的圖資。若有傳入 bbox，後端將執行 PostGIS 的 ST_Intersects 空間過濾
                 const res = await fetch(`http://127.0.0.1:8000/habitats?bbox=${bboxString}&source=${currentSource}`);
                 const data = await res.json();
+                
+                // 更新地圖圖層
                 geojsonLayer.clearLayers();
                 geojsonLayer.addData(data);
+                
+                // 更新右側統計儀表板
                 updateDashboard(data.features);
-            } catch (err) {}
+            } catch (err) {
+                console.error("圖資載入失敗", err);
+            }
         }
 
+        // 當地圖平移或縮放結束時，記錄新視角並重新撈取範圍內資料 (Lazy Loading 概念)
         map.on('moveend', () => {
             const center = map.getCenter();
             localStorage.setItem('biospatial_center', JSON.stringify([center.lat, center.lng]));
@@ -145,33 +208,49 @@
             fetchHabitatsInView();
         });
 
+        // UI 互動：透明度滑桿控制
         document.getElementById('opacity-slider').addEventListener('input', (e) => {
             currentOpacity = parseFloat(e.target.value);
             document.getElementById('opacity-val').innerText = Math.round(currentOpacity * 100) + '%';
             geojsonLayer.setStyle({ fillOpacity: currentOpacity });
         });
 
+        // UI 互動：影像來源切換控制
         document.getElementById('source-selector').addEventListener('change', (e) => {
             currentSource = e.target.value;
             fetchHabitatsInView();
         });
 
+        // ---------------------------------------------------------
+        // 6. 儀表板渲染邏輯 (Dashboard Rendering)
+        // ---------------------------------------------------------
         function updateDashboard(features) {
             const dashboardEl = document.getElementById('dashboard');
             if (features.length === 0) { dashboardEl.innerHTML = "此區域無資料"; return; }
+            
             let stats = {}, total = 0;
+            
+            // 走訪所有收到的圖資，依據棲地屬性進行面積加總
             features.forEach(f => {
-                const type = f.properties.habitat_type, area = f.properties.area_sqm;
-                stats[type] = (stats[type] || 0) + area; total += area;
+                const type = f.properties.habitat_type;
+                const area = f.properties.area_sqm;
+                stats[type] = (stats[type] || 0) + area; 
+                total += area;
             });
+            
             let html = "";
+            // 將平方公尺 (m²) 轉換為公頃 (ha) 顯示
             for (const [type, area] of Object.entries(stats)) {
-                html += `<div class="stat-item"><div><span class="stat-color-box" style="background:${habitatColors[type]}"></span>${type}</div><div class="stat-value">${(area / 10000).toFixed(2)} ha</div></div>`;
+                html += `<div class="stat-item">
+                            <div><span class="stat-color-box" style="background:${habitatColors[type] || '#bdc3c7'}"></span>${type}</div>
+                            <div class="stat-value">${(area / 10000).toFixed(2)} ha</div>
+                         </div>`;
             }
             html += `<div class="total-area">總計: ${(total / 10000).toFixed(2)} ha</div>`;
             dashboardEl.innerHTML = html;
         }
 
+        // 程式載入完畢後，執行首次的圖資獲取
         fetchHabitatsInView();
     </script>
 </body>

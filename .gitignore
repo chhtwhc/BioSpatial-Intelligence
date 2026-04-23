@@ -224,3 +224,7 @@ __marimo__/
 # AI 模型權重檔案
 weights/
 *.pth
+
+# 忽略自動生成的模型權重與快取
+models/
+*.joblib

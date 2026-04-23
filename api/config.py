@@ -14,6 +14,10 @@ BioSpatial-Intelligence - 系統組態中心 (Configuration Management)
 
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# 載入 .env 檔案中的環境變數，確保後續配置能正確讀取
+load_dotenv()
 
 # 定義專案根路徑，便於定位 local 儲存的影像與資料夾
 BASE_DIR = Path(__file__).resolve().parent.parent

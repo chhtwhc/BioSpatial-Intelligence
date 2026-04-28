@@ -21,6 +21,7 @@ from shapely.geometry import shape
 from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
 import time
 import os
+import scipy.ndimage as ndimage
 
 class SAMHabitatSegmenter:
     def __init__(self, checkpoint_path=None, model_type="vit_b"):
@@ -46,8 +47,8 @@ class SAMHabitatSegmenter:
         self.mask_generator = SamAutomaticMaskGenerator(
             model=self.sam,
             points_per_side=64,           # 提高掃描網格密度 (預設通常為32)，以捕捉細小棲地
-            pred_iou_thresh=0.6,          # 降低 IoU 閾值，容忍生態交界處(如林緣)的模糊邊界
-            stability_score_thresh=0.80,  # 降低穩定度閾值，鼓勵模型輸出更多潛在區塊
+            pred_iou_thresh=0.5,          # 降低 IoU 閾值，容忍生態交界處(如林緣)的模糊邊界
+            stability_score_thresh=0.8,  # 降低穩定度閾值，鼓勵模型輸出更多潛在區塊
             min_mask_region_area=10,      # 過濾掉極小面積的雜訊斑塊
             crop_n_layers=1,              # 啟動影像分塊掃描 (Image Cropping)，強迫模型放大檢視細節
             crop_n_points_downscale_factor=2
@@ -93,6 +94,19 @@ class SAMHabitatSegmenter:
         for i, mask_data in enumerate(masks_sorted, start=1):
             bool_mask = mask_data["segmentation"]
             master_mask[bool_mask] = i  
+        
+        print("[*] 正在執行背景空隙填補以達成 0 縫隙拓樸...")
+        # 找出所有未被 SAM 覆蓋的背景像素 (值為 0)
+        invalid_pixels = (master_mask == 0)
+        if invalid_pixels.any():
+            # 利用距離轉換，找出距離每個 0 像素最近的非 0 像素索引
+            distances, indices = ndimage.distance_transform_edt(  # type: ignore
+                invalid_pixels, 
+                return_distances=True, 
+                return_indices=True
+            )
+            # 強制將背景像素替換為最近鄰物件的 ID
+            master_mask = master_mask[tuple(indices)]
             
         print("[*] 正在將平整化後的遮罩轉換為唯一幾何多邊形 (Raster to Vector)...")
         features = []

@@ -14,6 +14,7 @@ BioSpatial-Intelligence - 系統組態中心 (Configuration Management)
 
 import os
 from pathlib import Path
+from urllib.parse import quote_plus
 from dotenv import load_dotenv
 
 # 載入 .env 檔案中的環境變數，確保後續配置能正確讀取
@@ -26,12 +27,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # 資料庫連線配置 (Database Connectivity)
 # ---------------------------------------------------------
 
-# 優先順序：系統環境變數 > 預設本地測試字串
-# 格式：postgresql://[使用者]:[密碼]@[主機]:[埠號]/[資料庫名稱]
-SQLALCHEMY_DATABASE_URL = os.getenv(
-    "DATABASE_URL", 
-    "postgresql://postgres:password@localhost:5432/biospatial_db"
-)
+# 從 .env 分別讀取獨立變數，這能避免使用單一 DATABASE_URL 時可能發生的解析陷阱
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "Your_Password_Here") 
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_NAME = os.getenv("DB_NAME", "postgres")
+
+# 組合 SQLAlchemy 標準連線字串
+# 格式：postgresql://[使用者]:[編碼後密碼]@[主機]:[埠號]/[資料庫名稱]
+SQLALCHEMY_DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 # ---------------------------------------------------------
 # 安全性與跨網域配置 (CORS Settings)

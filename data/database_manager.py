@@ -21,11 +21,11 @@ from sqlalchemy.engine import Engine
 from dotenv import load_dotenv
 
 # 確保載入環境變數中的資料庫憑證，避免將機密寫死在程式碼中
-load_dotenv()
+load_dotenv(override=True)
 
 # --- 1. 環境變數與全域常數 ---
 DB_USER = os.getenv("DB_USER", "postgres")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "your_password_here") 
+DB_PASSWORD = os.getenv("DB_PASSWORD", "Your_Password_Here") 
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = os.getenv("DB_PORT", "5432")
 DB_NAME = os.getenv("DB_NAME", "postgres")

@@ -195,6 +195,11 @@
                 
                 // 更新右側統計儀表板
                 updateDashboard(data.features);
+                
+                // 解除初始化中的顯示狀態
+                document.getElementById('status').innerText = "✅ 系統就緒";
+                document.getElementById('status').style.backgroundColor = "transparent";
+                
             } catch (err) {
                 console.error("圖資載入失敗", err);
             }

@@ -42,34 +42,37 @@ class HabitatClassifier:
     def _extract_features(self, gdf: gpd.GeoDataFrame, raster_path: str) -> pd.DataFrame:
         """
         核心特徵工程：分區統計 (Zonal Statistics)。
-        將空間多邊形覆蓋在光柵影像上，計算每個多邊形內部的像素統計值，作為機器學習的 X (特徵)。
         """
+        import rasterio
         print(f"[*] 正在萃取影像特徵 (Zonal Stats): {os.path.basename(raster_path)}")
         
-        # 提取統計特徵：均值 (反映主色調)、標準差 (反映紋理複雜度，例如樹冠層的標準差通常大於水體)
-        # band_num=1通常代表 Red, 2=Green, 3=Blue (依 rasterio 讀取順序)
-        stats = ['mean', 'std']
+        # 1. 動態讀取目標影像的空間參考系統 (CRS)
+        with rasterio.open(raster_path) as src:
+            raster_crs = src.crs
+
+        # 2. 空間投影對齊 (CRS Alignment)
+        # 確保提取特徵時，幾何多邊形與影像網格位於完全相同的座標系統
+        aligned_gdf = gdf.to_crs(raster_crs) if gdf.crs != raster_crs else gdf
         
+        stats = ['mean', 'std']
         feature_list = []
+        
         for band in [1, 2, 3]:
-            # rasterstats 會自動處理多邊形與像素網格的空間交集計算
+            # 3. 使用已對齊的 aligned_gdf 進行統計
             z_stats = zonal_stats(
-                gdf, 
+                aligned_gdf, 
                 raster_path, 
                 stats=stats, 
                 band=band, 
                 nodata=0
             )
-            # 將結果轉為 DataFrame，並重新命名欄位 (例如: b1_mean, b1_std)
             df_band = pd.DataFrame(z_stats).rename(
                 columns={s: f'b{band}_{s}' for s in stats}
             )
             feature_list.append(df_band)
             
-        # 將三個波段的特徵水平合併
         features_df = pd.concat(feature_list, axis=1)
         
-        # 防呆機制：若多邊形太小 (小於一個像素)，zonal_stats 可能回傳 None，需補值避免模型報錯
         imputer = SimpleImputer(strategy='mean')
         features_df_imputed = pd.DataFrame(
             imputer.fit_transform(features_df), 
@@ -133,9 +136,23 @@ class HabitatClassifier:
         # 2. 執行分類預測
         predictions = self.rf_model.predict(X_target)
         
+        # 定義對映字典，確保輸出能與前端的 habitatColors 完全吻合
+        # 註：此處的 0~4 順序為預設範例，請務必比對您 training_samples.gpkg 
+        # 原始建置時的編碼邏輯，必要時進行順序對調。
+        label_map = {
+            0: "水體/河流",
+            1: "高植生/林地",
+            2: "都市建物/人造設施",
+            3: "裸露地/工地",
+            4: "草生地"
+        }
+        
+        # 將模型輸出的結果轉換為字串
+        mapped_predictions = [label_map.get(int(p), str(p)) if str(p).isdigit() else p for p in predictions]
+        
         # 3. 將預測結果寫回原始 GeoDataFrame
         result_gdf = target_gdf.copy()
-        result_gdf['habitat_type'] = predictions
+        result_gdf['habitat_type'] = mapped_predictions
         
         print(f"[+] 推論完成！成功分類 {len(result_gdf)} 個實體。")
         return result_gdf
